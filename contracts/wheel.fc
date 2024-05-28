@@ -1,0 +1,120 @@
+#include "imports/stdlib.fc";
+
+;; TODO: Storage scheme
+
+int min_remaining_amount() asm "20000000 PUSHINT"; ;; always remain small amount here to pay for storage
+int min_deposit_amount() asm "20000000 PUSHINT"; ;; 0.02
+int max_deposits_number() asm "30 PUSHINT";
+int round_duration() asm "60 PUSHINT";
+
+int op::deposit() asm "1 PUSHINT";
+int op::get_winner() asm "2 PUSHINT";
+
+int error::msg_value_too_small() asm "400 PUSHINT";
+
+
+(int, int, int, cell) load_data() inline {
+    var ds = get_data().begin_parse();
+    return (ds~load_uint(64), ds~load_uint(64), ds~load_coins(), ds~load_ref());
+}
+
+() save_data(int started_at, int deposits_count, int totalDepositedAmount, cell deposits) impure inline {
+    set_data(begin_cell()
+        .store_uint(started_at, 64)
+        .store_uint(deposits_count, 64)
+        .store_coins(totalDepositedAmount)
+        .store_ref(deposits)
+        .end_cell());
+}
+
+int is_round_end(int deposits_count, int started_at) {
+    return (now() - started_at >= round_duration()) | (deposits_count >= max_deposits_number());
+}
+
+() send_prize(slice to) impure inline {
+    var msg = begin_cell()
+        .store_uint(0x10, 6) ;; nobounce, TODO: although maybe should bounce?
+        .store_slice(to)
+        .store_coins(0)
+        .store_uint(0, 107)
+        .end_cell();
+    raw_reserve(min_remaining_amount(), 2);
+    send_raw_message(msg, 128); ;; mode 128, send whole_balance - reserved
+}
+
+;; finds winner and send prize
+() end_round(int totalDepositedAmount, cell deposits) impure {
+    randomize_lt();
+    var randomNumber = rand(totalDepositedAmount); ;; 0..n-1
+
+    var cursor = 0;
+    var deposits_slice = deposits.begin_parse();
+    while (~ deposits_slice.slice_refs_empty?()) {
+        var deposit_amount = deposits_slice~load_coins();
+        var depositor_address = deposits_slice~load_msg_addr();
+
+        cursor += deposit_amount;
+        if(cursor >= randomNumber) {
+            save_data(0, 0, 0, begin_cell().end_cell());
+            send_prize(depositor_address);
+            return ();
+        }
+        deposits_slice = deposits_slice~load_ref().begin_parse();
+    }
+}
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+
+    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+        return ();
+    }
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+  
+    int op = in_msg_body~load_uint(32);
+
+    var (started_at, deposits_count, totalDepositedAmount, deposits) = load_data();
+
+    if(op == op::deposit()) {
+        throw_unless(error::msg_value_too_small(), msg_value >= min_deposit_amount());
+
+        slice deposit_owner = in_msg_body~load_msg_addr();
+
+        if(deposits_count == 0) {
+            started_at = now();
+        }
+        deposits_count += 1;
+        totalDepositedAmount += msg_value; 
+        deposits = begin_cell()
+            .store_coins(msg_value)
+            .store_slice(deposit_owner) 
+            .store_ref(deposits)
+            .end_cell();
+
+        if(is_round_end(deposits_count, started_at)) {
+            end_round(totalDepositedAmount, deposits);
+        } else {
+            save_data(started_at, deposits_count, totalDepositedAmount, deposits);
+        }
+        return ();
+    } 
+
+    if(op == op::get_winner()) {
+        if(is_round_end(deposits_count, started_at)) {
+            end_round(totalDepositedAmount, deposits);
+        }
+        return ();
+    } 
+
+    throw(0xffff); ;; op code not found
+}
+
+(int, int, int, cell) get_deposits() method_id {
+    var (started_at, deposits_count, totalDepositedAmount, deposits) = load_data();
+    return (started_at, deposits_count, totalDepositedAmount, deposits);
+}

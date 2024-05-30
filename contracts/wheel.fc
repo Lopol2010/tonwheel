@@ -1,11 +1,13 @@
 #include "imports/stdlib.fc";
 
-;; TODO: Storage scheme
+;; Storage scheme
+;; storage#_ started_at:(## 64) deposits_count:(## 64) total_deposited_amount:Coins deposits:^Deposit = Storage;
+;; deposit#_ amount:Coins deposit_owner:MsgAddress next:^(Maybe Deposit) = Deposit;
 
-int min_remaining_amount() asm "20000000 PUSHINT"; ;; always remain small amount here to pay for storage
-int min_deposit_amount() asm "20000000 PUSHINT"; ;; 0.02
-int max_deposits_number() asm "30 PUSHINT";
-int round_duration() asm "60 PUSHINT";
+int min_remaining_amount() asm "10000000 PUSHINT";  ;; always remain small amount here to pay for storage
+int min_deposit_amount() asm "10000000 PUSHINT";    ;; should throw error when deposit is smaller than this
+int max_deposits_number() asm "20 PUSHINT";          ;; should end round if max deposits is reached
+int round_duration() asm "20 PUSHINT";              ;; should end round if duration is elapsed
 
 int op::deposit() asm "1 PUSHINT";
 int op::get_winner() asm "2 PUSHINT";
@@ -33,7 +35,7 @@ int is_round_end(int deposits_count, int started_at) {
 
 () send_prize(slice to) impure inline {
     var msg = begin_cell()
-        .store_uint(0x10, 6) ;; nobounce, TODO: although maybe should bounce?
+        .store_uint(0x18, 6) ;; bounce
         .store_slice(to)
         .store_coins(0)
         .store_uint(0, 107)

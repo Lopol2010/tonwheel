@@ -28,9 +28,9 @@ export class Wheel implements Contract {
         return new Wheel(contractAddress(workchain, init), init);
     }
 
-    async sendDeploy(provider: ContractProvider, via: Sender) {
+    async sendDeploy(provider: ContractProvider, via: Sender, value: bigint) {
         await provider.internal(via, {
-            value: toNano("0.02"),
+            value,
             body: beginCell().endCell(),
         });
     }

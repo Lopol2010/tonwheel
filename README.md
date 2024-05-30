@@ -1,24 +1,10 @@
 # TON Wheel
 
-## Project structure
-
--   `contracts` - source code of all the smart contracts of the project and their dependencies.
--   `wrappers` - wrapper classes (implementing `Contract` from ton-core) for the contracts, including any [de]serialization primitives and compilation functions.
--   `tests` - tests for the contracts.
--   `scripts` - scripts used by the project, mainly the deployment scripts.
-
 ## How to use
 
 ### Deployment
-In deployment script, change `deploySeed` to a unique number, otherwise you'll send deploy to the same address which is error.
-
-### Build
-
-`npx blueprint build` or `yarn blueprint build`
-
-### Test
-
-`npx blueprint test` or `yarn blueprint test`
+Go to wheel contract, change constants on top of the file, according to your need, this could break the tests.  
+In deployment script, change `deploySeed` to a unique number, change amount transferred via deploy message if needed.  
 
 ### Deploy or run another script
 
@@ -26,6 +12,9 @@ In deployment script, change `deploySeed` to a unique number, otherwise you'll s
 or with filled `.env`  
 `npx blueprint run scriptName --mnemonic` 
 
+### Test
+
+`npx blueprint test` or `yarn blueprint test`
 
 ### Add a new contract
 

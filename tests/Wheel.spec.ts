@@ -15,10 +15,12 @@ describe('Wheel', () => {
 
     let blockchain: Blockchain;
     let deployer: SandboxContract<TreasuryContract>;
-    let depositOwnerZeroBalance: SandboxContract<TreasuryContract>;
+    let arbitraryDepositOwner: SandboxContract<TreasuryContract>;
     let wheel: SandboxContract<Wheel>;
     let now: number;
     let players: SandboxContract<TreasuryContract>[];
+    let startBalance = toNano("0.01");
+    let maxDeposits = 20;
 
     beforeEach(async () => {
         blockchain = await Blockchain.create();
@@ -32,13 +34,13 @@ describe('Wheel', () => {
         wheel = blockchain.openContract(Wheel.createFromConfig({ deploySeed: 0 }, code));
 
         deployer = await blockchain.treasury('deployer');
-        depositOwnerZeroBalance = await blockchain.treasury('depositOwner', { balance: 0n });
-        players = new Array(30);
-        for (let i = 0; i < 30; i++) {
+        arbitraryDepositOwner = await blockchain.treasury('depositOwner', { balance: 0n });
+        players = new Array(maxDeposits);
+        for (let i = 0; i < maxDeposits; i++) {
             players[i] = await blockchain.treasury("player" + i, { balance: 0n });
         }
 
-        const deployResult = await wheel.sendDeploy(deployer.getSender());
+        const deployResult = await wheel.sendDeploy(deployer.getSender(), startBalance);
 
         expect(deployResult.transactions).toHaveTransaction({
             from: deployer.address,
@@ -63,12 +65,12 @@ describe('Wheel', () => {
 
     it('should set correct storage on deposit', async () => {
 
-        expect(toNano("0.02") - await wheel.getBalance()).toBeLessThanOrEqual(toNano("0.001"));
+        expect(startBalance - await wheel.getBalance()).toBeLessThanOrEqual(toNano("0.001"));
 
         let txs = await wheel.sendDeposit(deployer.getSender(), "0.1");
         let { startedAt, depositsCount, totalDepositedAmount, deposits } = await wheel.getDeposits();
 
-        expect(await wheel.getBalance()).toBeGreaterThan(toNano("0.02"));
+        expect(await wheel.getBalance()).toBeGreaterThan(startBalance);
 
         expect(startedAt).toBe(BigInt(now));
         expect(depositsCount).toBe(1n);
@@ -81,7 +83,7 @@ describe('Wheel', () => {
 
     it('should throw when deposit too small amount', async () => {
 
-        let txs = await wheel.sendDeposit(deployer.getSender(), "0.01");
+        let txs = await wheel.sendDeposit(deployer.getSender(), "0.009");
 
         expect(txs.transactions).toHaveTransaction({
             from: deployer.address,
@@ -91,17 +93,17 @@ describe('Wheel', () => {
         })
     });
 
-    it('should choose random winner after round duration end', async () => {
+    it('should choose winner after round duration end', async () => {
 
-        expect(await depositOwnerZeroBalance.getBalance()).toBe(0n);
+        expect(await arbitraryDepositOwner.getBalance()).toBe(0n);
 
-        await wheel.sendDeposit(deployer.getSender(), "0.03", depositOwnerZeroBalance.address);
+        await wheel.sendDeposit(deployer.getSender(), "0.03", arbitraryDepositOwner.address);
         blockchain.now = now + 61;
-        let txs = await wheel.sendDeposit(deployer.getSender(), "0.03", depositOwnerZeroBalance.address);
+        let txs = await wheel.sendDeposit(deployer.getSender(), "0.03", arbitraryDepositOwner.address);
 
-        expect(await depositOwnerZeroBalance.getBalance()).toBeGreaterThan(0n);
-        expect(await wheel.getBalance()).toBe(toNano("0.02"));
-        expect(toNano("0.02") - await wheel.getBalance()).toBeLessThanOrEqual(toNano("0.001"));
+        expect(await arbitraryDepositOwner.getBalance()).toBeGreaterThan(0n);
+        expect(await wheel.getBalance()).toBe(startBalance);
+        expect(startBalance - await wheel.getBalance()).toBeLessThanOrEqual(toNano("0.001"));
 
         let { startedAt, depositsCount, totalDepositedAmount, deposits } = await wheel.getDeposits();
 
@@ -112,21 +114,23 @@ describe('Wheel', () => {
         expect(deposits.length).toBe(0);
     });
 
-    it('should choose random winner after max deposits reached', async () => {
+    it('should choose winner after max deposits reached', async () => {
 
-        expect(await depositOwnerZeroBalance.getBalance()).toBe(0n);
+        expect(await arbitraryDepositOwner.getBalance()).toBe(0n);
 
+        // trigger round_end with winner selection
         for (let i = 0; i < players.length; i++) {
             await wheel.sendDeposit(deployer.getSender(), "1.0", players[i].address);
         }
 
-        expect(await wheel.getBalance()).toBe(toNano("0.02"));
+        expect(await wheel.getBalance()).toBe(startBalance);
 
+        // get winner's balance
         let balances = await Promise.all(players.map(p => (p.getBalance())));
         balances = balances.filter(b => b > 0n);
 
-        // winner should get 30 TON minus fees
-        expect(toNano("30") - balances[0]).toBeLessThan(toNano("0.2"));
+        // winner should get whole pool's TONs minus fees
+        expect(toNano("1.0") * BigInt(maxDeposits) - balances[0]).toBeLessThan(toNano("0.1"));
 
         let { startedAt, depositsCount, totalDepositedAmount, deposits } = await wheel.getDeposits();
 
@@ -137,7 +141,6 @@ describe('Wheel', () => {
         expect(deposits.length).toBe(0);
     });
 
-    // TODO: test with random, here is helper function
     async function setRandomSeed() {
 
         const res = await blockchain.runGetMethod(wheel.address,
@@ -146,7 +149,7 @@ describe('Wheel', () => {
             { randomSeed: randomBytes(32) } // randomSeed can be specified only if calling blockchain.runGetMethod or similar...
         );
         let wheel2 = blockchain.openContract(Wheel.createFromConfig({ deploySeed: 999 }, code));
-        const deployResult = await wheel2.sendDeploy(deployer.getSender());
+        const deployResult = await wheel2.sendDeploy(deployer.getSender(), startBalance);
 
     }
 });

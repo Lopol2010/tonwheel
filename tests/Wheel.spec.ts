@@ -141,6 +141,30 @@ describe('Wheel', () => {
         expect(deposits.length).toBe(0);
     });
 
+    it('should choose winner from round end message', async () => {
+
+        expect(await arbitraryDepositOwner.getBalance()).toBe(0n);
+
+        await wheel.sendDeposit(deployer.getSender(), "0.03", arbitraryDepositOwner.address);
+        blockchain.now = now + 61;
+        // let txs = await wheel.sendDeposit(deployer.getSender(), "0.03", arbitraryDepositOwner.address);
+        let txs = await wheel.sendEndRound(deployer.getSender());
+        // console.log(txs)
+
+        expect(await arbitraryDepositOwner.getBalance()).toBeGreaterThan(0n);
+        expect(await wheel.getBalance()).toBe(startBalance);
+        expect(startBalance - await wheel.getBalance()).toBeLessThanOrEqual(toNano("0.001"));
+
+        let { startedAt, depositsCount, totalDepositedAmount, deposits } = await wheel.getDeposits();
+
+        expect(startedAt).toBe(0n);
+        expect(depositsCount).toBe(0n);
+        expect(totalDepositedAmount).toBe(0n);
+
+        expect(deposits.length).toBe(0);
+    });
+
+
     async function setRandomSeed() {
 
         const res = await blockchain.runGetMethod(wheel.address,

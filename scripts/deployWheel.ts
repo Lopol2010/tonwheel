@@ -4,7 +4,7 @@ import env from "./env";
 import { Wheel } from '../wrappers/Wheel';
 
 export async function run(provider: NetworkProvider) {
-    const wheel = provider.open(Wheel.createFromConfig({ deploySeed: 4 }, await compile('Wheel')));
+    const wheel = provider.open(Wheel.createFromConfig({ deploySeed: 5 }, await compile('Wheel')));
 
     if(await provider.isContractDeployed(wheel.address)) {
         throw Error("contract is already deployed!");

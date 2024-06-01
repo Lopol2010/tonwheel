@@ -35,6 +35,19 @@ export class Wheel implements Contract {
         });
     }
 
+    async sendEndRound(provider: ContractProvider, via: Sender) {
+
+        const messageBody = beginCell()
+            .storeUint(Op.get_winner, 32)
+            .endCell();
+
+        await provider.internal(via, {
+            value: toNano("0.01"),
+            body: messageBody,
+            // bounce: true,
+            sendMode: SendMode.PAY_GAS_SEPARATELY
+        })
+    }
     async sendDeposit(provider: ContractProvider, via: Sender, value: bigint | string, deposit_owner: Address | undefined = via.address) {
 
         if(!deposit_owner) {

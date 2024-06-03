@@ -1,36 +1,51 @@
 #include "imports/stdlib.fc";
 
-;; Storage scheme
-;; storage#_ started_at:(## 64) deposits_count:(## 64) total_deposited_amount:Coins deposits:^Deposit = Storage;
-;; deposit#_ amount:Coins deposit_owner:MsgAddress next:^(Maybe Deposit) = Deposit;
+{-
+    Storage scheme
+    storage#_ 
+            started_at:(## 32) 
+            deposits_count:(## 16) 
+            total_deposited_amount:Coins 
+            comission_percent:(## 16) 
+            comission_address:MsgAddress 
+            deposits:^Deposit = Storage;
+    deposit#_ amount:Coins beneficiary_address:MsgAddress next:^(Maybe Deposit) = Deposit;
 
-int min_remaining_amount() asm "10000000 PUSHINT";  ;; always remain small amount here to pay for storage
-int min_deposit_amount() asm "10000000 PUSHINT";    ;; should throw error when deposit is smaller than this
-int max_deposits_number() asm "20 PUSHINT";          ;; should end round if max deposits is reached
-int round_duration() asm "20 PUSHINT";              ;; should end round if duration is elapsed
+    TODO: in theory can optimize gas usage by packing multiple deposits in each cell instead of deposit per cell, creating cell is 500 gas
+-}
 
-int op::deposit() asm "1 PUSHINT";
-int op::get_winner() asm "2 PUSHINT";
+int min_remaining_amount() asm "20000000 PUSHINT"; ;; always remain small amount here to pay for storage
+int min_deposit_amount() asm "10000000 PUSHINT"; ;; should throw error when deposit is smaller than this
+int min_comission_amount_to_transfer() asm "10000000 PUSHINT"; ;; should transfer amount that at least can pay for gas
+int max_deposits_number() asm "20 PUSHINT"; ;; should end round if max deposits is reached
+int max_round_duration() asm "60 PUSHINT"; ;; should end round if duration is elapsed
+int max_basis_points() asm "10000 PUSHINT"; ;; this is 100% for percentage calculations
+
+int op::deposit() asm "1 PUSHINT";     
+int op::try_end_round() asm "2 PUSHINT";
+int op::set_comission_cfg() asm "3 PUSHINT";
 
 int error::msg_value_too_small() asm "400 PUSHINT";
 
 
-(int, int, int, cell) load_data() inline {
+(int, int, int, int, slice, cell) load_data() inline {
     var ds = get_data().begin_parse();
-    return (ds~load_uint(64), ds~load_uint(64), ds~load_coins(), ds~load_ref());
+    return (ds~load_uint(32), ds~load_uint(16), ds~load_coins(), ds~load_uint(16), ds~load_msg_addr(), ds~load_ref());
 }
 
-() save_data(int started_at, int deposits_count, int totalDepositedAmount, cell deposits) impure inline {
+() save_data(int started_at, int deposits_count, int total_deposited_amount, int comission_percent, slice comission_address, cell deposits) impure inline {
     set_data(begin_cell()
-        .store_uint(started_at, 64)
-        .store_uint(deposits_count, 64)
-        .store_coins(totalDepositedAmount)
+        .store_uint(started_at, 32)
+        .store_uint(deposits_count, 16)
+        .store_coins(total_deposited_amount)
+        .store_uint(comission_percent, 16)
+        .store_slice(comission_address)
         .store_ref(deposits)
         .end_cell());
 }
 
 int is_round_end(int deposits_count, int started_at) {
-    return (now() - started_at >= round_duration()) | (deposits_count >= max_deposits_number());
+    return (now() - started_at >= max_round_duration()) | (deposits_count >= max_deposits_number());
 }
 
 () send_prize(slice to) impure inline {
@@ -44,21 +59,35 @@ int is_round_end(int deposits_count, int started_at) {
     send_raw_message(msg, 128); ;; mode 128, send whole_balance - reserved
 }
 
-;; finds winner and send prize
-() end_round(int totalDepositedAmount, cell deposits) impure {
+() send_comission(slice to, int amount) impure inline {
+    var msg = begin_cell()
+        .store_uint(0x18, 6) ;; bounce
+        .store_slice(to)
+        .store_coins(amount)
+        .store_uint(0, 107)
+        .end_cell();
+    send_raw_message(msg, 0);
+}
+
+;; finds winner and sends prize
+() end_round(int total_deposited_amount, int comission_percent, slice comission_address, cell deposits) impure {
     randomize_lt();
-    var randomNumber = rand(totalDepositedAmount); ;; 0..n-1
+    var randomNumber = rand(total_deposited_amount); ;; 0..n-1
 
     var cursor = 0;
     var deposits_slice = deposits.begin_parse();
     while (~ deposits_slice.slice_refs_empty?()) {
         var deposit_amount = deposits_slice~load_coins();
-        var depositor_address = deposits_slice~load_msg_addr();
+        var beneficiary_address = deposits_slice~load_msg_addr();
 
         cursor += deposit_amount;
         if(cursor >= randomNumber) {
-            save_data(0, 0, 0, begin_cell().end_cell());
-            send_prize(depositor_address);
+            var comission_amount = muldiv(total_deposited_amount, comission_percent, max_basis_points());
+            if(comission_amount > min_comission_amount_to_transfer()) {
+                send_comission(comission_address, comission_amount);
+            }
+            send_prize(beneficiary_address);
+            save_data(0, 0, 0, comission_percent, comission_address, begin_cell().end_cell());
             return ();
         }
         deposits_slice = deposits_slice~load_ref().begin_parse();
@@ -80,43 +109,57 @@ int is_round_end(int deposits_count, int started_at) {
   
     int op = in_msg_body~load_uint(32);
 
-    var (started_at, deposits_count, totalDepositedAmount, deposits) = load_data();
+    var (started_at, deposits_count, total_deposited_amount, comission_percent, comission_address, deposits) = load_data();
 
     if(op == op::deposit()) {
         throw_unless(error::msg_value_too_small(), msg_value >= min_deposit_amount());
 
-        slice deposit_owner = in_msg_body~load_msg_addr();
+        slice beneficiary_address = in_msg_body~load_msg_addr();
 
         if(deposits_count == 0) {
             started_at = now();
         }
         deposits_count += 1;
-        totalDepositedAmount += msg_value; 
+        total_deposited_amount += msg_value; 
         deposits = begin_cell()
             .store_coins(msg_value)
-            .store_slice(deposit_owner) 
+            .store_slice(beneficiary_address) 
             .store_ref(deposits)
             .end_cell();
 
         if(is_round_end(deposits_count, started_at)) {
-            end_round(totalDepositedAmount, deposits);
+            end_round(total_deposited_amount, comission_percent, comission_address, deposits);
         } else {
-            save_data(started_at, deposits_count, totalDepositedAmount, deposits);
+            save_data(started_at, deposits_count, total_deposited_amount, comission_percent, comission_address, deposits);
         }
         return ();
     } 
 
-    if(op == op::get_winner()) {
+    if(op == op::try_end_round()) {
         if(is_round_end(deposits_count, started_at)) {
-            end_round(totalDepositedAmount, deposits);
+            end_round(total_deposited_amount, comission_percent, comission_address, deposits);
         }
         return ();
     } 
+
+    if(op == op::set_comission_cfg()) {
+        int new_comission_percent = in_msg_body~load_uint(16);
+        slice new_comission_address = in_msg_body~load_msg_addr();
+
+        if(new_comission_address.preload_uint(2) == 0) {
+            new_comission_address = comission_address;
+        }
+        if((new_comission_percent < 0) | (new_comission_percent > max_basis_points())) {
+            new_comission_percent = comission_percent;
+        }
+        save_data(started_at, deposits_count, total_deposited_amount, new_comission_percent, new_comission_address, deposits);
+        return ();
+    }
 
     throw(0xffff); ;; op code not found
 }
 
-(int, int, int, cell) get_deposits() method_id {
-    var (started_at, deposits_count, totalDepositedAmount, deposits) = load_data();
-    return (started_at, deposits_count, totalDepositedAmount, deposits);
+(int, int, int, int, slice, cell) get_storage_data() method_id {
+    var (started_at, deposits_count, total_deposited_amount, comission_percent, comission_address, deposits) = load_data();
+    return (started_at, deposits_count, total_deposited_amount, comission_percent, comission_address, deposits);
 }

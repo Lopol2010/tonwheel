@@ -1,17 +1,20 @@
 import { Address, beginCell, Cell, Contract, contractAddress, ContractProvider, Sender, SendMode, toNano } from '@ton/core';
-import { Op } from './constants';
+import { Consts, Op } from './constants';
 
 export type WheelConfig = {
-    deploySeed: number
+    deploySeed: number,
+    comissionPercent: number,
+    comissionAddress: Address,
 };
 
 export function WheelConfigToCell(config: WheelConfig): Cell {
     return beginCell()
-        // TODO: put seed here
-        .storeUint(0, 64)
-        .storeUint(0, 64)
+        .storeUint(0, 32)
+        .storeUint(0, 16)
         .storeCoins(0)
-        .storeRef(beginCell().storeUint(config.deploySeed, 64).endCell())
+        .storeUint(config.comissionPercent, 16)
+        .storeAddress(config.comissionAddress)
+        .storeRef(beginCell().storeUint(config.deploySeed, 32).endCell())
         .endCell();
 }
 
@@ -35,16 +38,33 @@ export class Wheel implements Contract {
         });
     }
 
-    async sendEndRound(provider: ContractProvider, via: Sender) {
+    async sendSetComissionCfg(provider: ContractProvider, via: Sender, new_comission_percent: number, new_comission_address: Address) {
+
+        if(new_comission_percent < 0 || new_comission_percent > Consts.max_basis_points) {
+            throw new Error("Wrong comission percent");
+        }
 
         const messageBody = beginCell()
-            .storeUint(Op.get_winner, 32)
+            .storeUint(Op.set_comission_cfg, 32)
+            .storeUint(new_comission_percent, 16)
+            .storeAddress(new_comission_address)
+            .endCell();
+
+        await provider.internal(via, {
+            value: toNano("0.01"), // TODO: provide more precise gas or introduce 'return excesses' mechanism in contract
+            body: messageBody,
+            sendMode: SendMode.PAY_GAS_SEPARATELY
+        })
+    }
+    async sendTryEndRound(provider: ContractProvider, via: Sender) {
+
+        const messageBody = beginCell()
+            .storeUint(Op.try_end_round, 32)
             .endCell();
 
         await provider.internal(via, {
             value: toNano("0.01"),
             body: messageBody,
-            // bounce: true,
             sendMode: SendMode.PAY_GAS_SEPARATELY
         })
     }
@@ -62,28 +82,30 @@ export class Wheel implements Contract {
         await provider.internal(via, {
             value: typeof value === "string" ? toNano(value) : value,
             body: messageBody,
-            // bounce: true,
             sendMode: SendMode.PAY_GAS_SEPARATELY
         })
     }
 
-    async getDeposits(provider: ContractProvider) {
-        const { stack } = await provider.get("get_deposits", []);
+    async getStorageData(provider: ContractProvider) {
+        const { stack } = await provider.get("get_storage_data", []);
 
-        let recurse = (slice: any): any => {
+        // recursive transform 'deposits' into more readable array
+        let convertDepositsToArray = (slice: any): any => {
             if (slice.remainingRefs == 0) return [];
 
             return [{
                 amount: slice.loadCoins(),
                 depositor: slice.loadAddress(), 
-            }].concat(recurse(slice.loadRef().beginParse()));
+            }].concat(convertDepositsToArray(slice.loadRef().beginParse()));
         }
 
         return { 
-            startedAt: stack.readBigNumber(),
-            depositsCount: stack.readBigNumber(),
+            startedAt: stack.readNumber(),
+            depositsCount: stack.readNumber(),
             totalDepositedAmount: stack.readBigNumber(), 
-            deposits: recurse(stack.readCell().beginParse()) 
+            comissionPercent: stack.readNumber(), 
+            comissionAddress: stack.readAddress(),
+            deposits: convertDepositsToArray(stack.readCell().beginParse()) 
         };
     }
 

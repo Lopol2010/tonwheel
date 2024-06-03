@@ -1,6 +1,11 @@
+export abstract class Consts {
+    static max_basis_points = 10000;
+}
+
 export abstract class Op {
     static deposit = 1;
-    static get_winner = 2;
+    static try_end_round = 2;
+    static set_comission_cfg = 3;
 }
 
 export abstract class Errors {
